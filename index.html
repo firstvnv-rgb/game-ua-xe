@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Game Đua Xe Mobile</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        body {
+            background: #2c3e50;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+        #gameContainer {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            max-width: 450px;
+            max-height: 800px;
+            background: #111;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            overflow: hidden;
+        }
+        canvas {
+            display: block;
+        }
+        #ui {
+            position: absolute;
+            top: 15px;
+            left: 15px;
+            right: 15px;
+            display: flex;
+            justify-content: space-between;
+            font-size: 20px;
+            font-weight: bold;
+            color: #fff;
+            pointer-events: none;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+            z-index: 5;
+        }
+        #scoreBoard { color: #00ffcc; }
+        #speedBoard { color: #ffcc00; }
+        #gameOverScreen {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s ease;
+            z-index: 10;
+        }
+        #gameOverScreen.show {
+            opacity: 1;
+            pointer-events: auto;
+        }
+        #gameOverScreen h1 {
+            font-size: 40px;
+            margin-bottom: 10px;
+            color: #ff3333;
+            letter-spacing: 2px;
+        }
+        #gameOverScreen p {
+            font-size: 22px;
+            margin-bottom: 25px;
+        }
+        #restartBtn {
+            padding: 14px 35px;
+            font-size: 18px;
+            font-weight: bold;
+            background: linear-gradient(45deg, #ff416c, #ff4b2b);
+            color: white;
+            border: none;
+            border-radius: 30px;
+            cursor: pointer;
+            box-shadow: 0 4px 15px rgba(255, 75, 43, 0.4);
+        }
+        #restartBtn:active {
+            transform: scale(0.95);
+        }
+    </style>
+</head>
+<body>
+
+<div id="gameContainer">
+    <div id="ui">
+        <div id="scoreBoard">Điểm: 0</div>
+        <div id="speedBoard">Kmh: 60</div>
+    </div>
+    
+    <div id="gameOverScreen">
+        <h1>BỊ TAI NẠN!</h1>
+        <p>Quãng đường: <span id="finalScore">0</span> m</p>
+        <button id="restartBtn" onclick="resetGame()">Đua Lại</button>
+    </div>
+
+    <canvas id="canvas"></canvas>
+</div>
+
+<script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const scoreBoard = document.getElementById('scoreBoard');
+    const speedBoard = document.getElementById('speedBoard');
+    const gameOverScreen = document.getElementById('gameOverScreen');
+    const finalScore = document.getElementById('finalScore');
+
+    const container = document.getElementById('gameContainer');
+    canvas.width = container.clientWidth || window.innerWidth;
+    canvas.height = container.clientHeight || window.innerHeight;
+
+    // Cấu hình đường đua (Chia làm 3 làn đường công bằng)
+    const laneWidth = canvas.width / 3;
+    
+    // Khởi tạo thông số game
+    let score = 0;
+    let gameSpeed = 5; 
+    let gameOver = false;
+    let roadStripesY = 0;
+
+    // Đối tượng xe của người chơi (Xe màu Đỏ)
+    const player = {
+        width: 50,
+        height: 90,
+        x: laneWidth * 1 + (laneWidth - 50) / 2, // Xuất phát ở làn giữa
+        y: canvas.height - 140,
+        targetX: laneWidth * 1 + (laneWidth - 50) / 2,
+        speed: 12 // Tốc độ lách làn
+    };
+
+    // Mảng lưu các xe cản đường (Xe chướng ngại vật)
+    let obstacles = [];
+    const obsColors = ['#007bff', '#28a745', '#ffc107', '#17a2b8', '#6f42c1'];
+
+    // Xử lý điều khiển bằng cảm ứng (Chia đôi màn hình Trái / Phải)
+    window.addEventListener('touchstart', function(e) {
+        if (gameOver) return;
+        let touchX = e.touches[0].clientX;
+        let midPoint = window.innerWidth / 2;
+
+        // Lấy vị trí làn hiện tại (0, 1 hoặc 2)
+        let currentLane = Math.round((player.targetX - (laneWidth - player.width)/2) / laneWidth);
+
+        if (touchX < midPoint) {
+            // Chạm bên trái -> Qua làn trái (nếu có thể)
+            if (currentLane > 0) currentLane--;
+        } else {
+            // Chạm bên phải -> Qua làn phải (nếu có thể)
+            if (currentLane < 2) currentLane++;
+        }
+        
+        player.targetX = currentLane * laneWidth + (laneWidth - player.width) / 2;
+    });
+
+    // Hàm tạo xe cản đường ngẫu nhiên
+    function spawnObstacle() {
+        if (obstacles.length === 0 || obstacles[obstacles.length - 1].y > 250) {
+            if (Math.random() < 0.03) {
+                let randomLane = Math.floor(Math.random() * 3);
+                let obsX = randomLane * laneWidth + (laneWidth - 48) / 2;
+                let randomColor = obsColors[Math.floor(Math.random() * obsColors.length)];
+                
+                obstacles.push({
+                    x: obsX,
+                    y: -100,
+                    width: 48,
+                    height: 85,
+                    color: randomColor
+                });
+            }
+        }
+    }
+
+    // Hàm vẽ chiếc xe (Dùng canvas để vẽ mô phỏng xe đua)
+    function drawCar(x, y, width, height, color, isPlayer) {
+        // Thân xe chính
+        ctx.fillStyle = color;
+        ctx.fillRect(x, y + 10, width, height - 20);
+
+        // Đầu xe & Đuôi xe bo góc nhẹ
+        ctx.beginPath();
+        ctx.arc(x + width/2, y + 15, width/2, Math.PI, 0);
+        ctx.fill();
+        ctx.fillRect(x, y + height - 15, width, 10);
+
+        // Kính chắn gió (Màu đen/xanh)
+        ctx.fillStyle = isPlayer ? '#e0f7fa' : '#333';
+        ctx.fillRect(x + 6, y + 22, width - 12, 15);
+
+        // Bánh xe (4 bánh màu đen)
+        ctx.fillStyle = '#000';
+        ctx.fillRect(x - 4, y + 12, 5, 16);  // Trước trái
+        ctx.fillRect(x + width - 1, y + 12, 5, 16); // Trước phải
+        ctx.fillRect(x - 4, y + height - 28, 5, 16); // Sau trái
+        ctx.fillRect(x + width - 1, y + height - 28, 5, 16); // Sau phải
+
+        // Đèn xe
+        ctx.fillStyle = isPlayer ? '#fff700' : '#ff3300';
+        if (isPlayer) {
+            ctx.fillRect(x + 6, y + 5, 6, 4);
+            ctx.fillRect(x + width - 12, y + 5, 6, 4);
+        } else {
+            ctx.fillRect(x + 6, y + height - 5, 6, 4);
+            ctx.fillRect(x + width - 12, y + height - 5, 6, 4);
+        }
+    }
+
+    // Vẽ hiệu ứng đường hiệu ứng chuyển động
+    function drawRoad() {
+        // Nền đường nhựa xám
+        ctx.fillStyle = '#3a3a3a';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Vạch kẻ đường hai bên rìa (Màu vàng cố định)
+        ctx.fillStyle = '#ffcc00';
+        ctx.fillRect(5, 0, 6, canvas.height);
+        ctx.fillRect(canvas.width - 11, 0, 6, canvas.height);
+
+        // Vạch đứt đoạn ở giữa các làn (Chuyển động tạo cảm giác di chuyển)
+        ctx.fillStyle = '#ffffff';
+        roadStripesY += gameSpeed;
+        if (roadStripesY >= 60) {
+            roadStripesY = 0;
+        }
+
+        for (let i = roadStripesY - 60; i < canvas.height; i += 60) {
+            ctx.fillRect(laneWidth, i, 4, 30);
+            ctx.fillRect(laneWidth * 2, i, 4, 30);
+        }
+    }
+
+    // Cập nhật logic game định kỳ
+    function updateData() {
+        if (gameOver) return;
+
+        // Hiệu ứng mượt mà khi xe chuyển làn (Chạy mượt tới điểm Target)
+        if (player.x < player.targetX) {
+            player.x += player.speed;
+            if (player.x > player.targetX) player.x = player.targetX;
+        } else if (player.x > player.targetX) {
+            player.x -= player.speed;
+            if (player.x < player.targetX) player.x = player.targetX;
+        }
+
+        spawnObstacle();
+
+        // Xử lý danh sách xe cản đường
+        for (let i = obstacles.length - 1; i >= 0; i--) {
+            obstacles[i].y += gameSpeed;
+
+            // Kiểm tra va chạm hộp (AABB Collision) giữa xe mình và xe địch
+            if (player.x < obstacles[i].x + obstacles[i].width &&
+                player.x + player.width > obstacles[i].x &&
+                player.y < obstacles[i].y + obstacles[i].height &&
+                player.y + player.height > obstacles[i].y) {
+                
+                endGame();
+                return;
+            }
+
+            // Khi vượt qua một chiếc xe thành công
+            if (obstacles[i].y > canvas.height) {
+                obstacles.splice(i, 1);
+                score += 10;
+                scoreBoard.innerText = "Điểm: " + score;
+                
+                // Tăng tốc độ game dần theo điểm số để tăng độ khó
+                if (score % 40 === 0 && gameSpeed < 15) {
+                    gameSpeed += 1;
+                    speedBoard.innerText = "Kmh: " + (60 + gameSpeed * 10);
+                }
+            }
+        }
+    }
+
+    function endGame() {
+        gameOver = true;
+        finalScore.innerText = score;
+        gameOverScreen.classList.add('show');
+    }
+
+    function resetGame() {
+        score = 0;
+        gameSpeed = 5;
+        obstacles = [];
+        gameOver = false;
+        player.targetX = laneWidth * 1 + (laneWidth - 50) / 2;
+        player.x = player.targetX;
+        scoreBoard.innerText = "Điểm: 0";
+        speedBoard.innerText = "Kmh: 110";
+        gameOverScreen.classList.remove('show');
+    }
+
+    // Vòng lặp đồ họa chính
+    function gameLoop() {
+        drawRoad();
+        
+        // Vẽ xe chướng ngại vật trước
+        obstacles.forEach(obs => {
+            drawCar(obs.x, obs.y, obs.width, obs.height, obs.color, false);
+        });
+
+        // Vẽ xe người chơi đè lên sau
+        drawCar(player.x, player.y, player.width, player.height, '#ff1744', true);
+
+        updateData();
+        requestAnimationFrame(gameLoop);
+    }
+
+    // Bắt đầu chạy game đua xe
+    gameLoop();
+</script>
+
+</body>
+</html>
